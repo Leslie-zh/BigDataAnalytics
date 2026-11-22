@@ -91,6 +91,14 @@ class CloneDetector {
         //
         // Return: file, including file.instances which is an array of Clone objects (or an empty array).
         //
+        const newInstances = file.chunks.flatMap((chunk) => {
+            return compareFile.chunks
+                .filter((otherChunk) => this.#chunkMatch(chunk, otherChunk))
+                .map(
+                    (matchingChunk) =>
+                        new Clone(file.name, compareFile.name, chunk, matchingChunk),
+                );
+        });
 
         file.instances = file.instances || [];        
         file.instances = file.instances.concat(newInstances);
@@ -112,6 +120,16 @@ class CloneDetector {
         //         and not any of the Clones used during that expansion.
         //
 
+        file.instances = file.instances.reduce((accumulator, clone) => {
+            const expanded = accumulator.find((element) =>
+                element.maybeExpandWith(clone),
+            );
+            if (!expanded) {
+                accumulator.push(clone);
+            }
+            return accumulator;
+        }, []);
+
         return file;
     }
     
@@ -128,6 +146,17 @@ class CloneDetector {
         //
         // Return: file, with file.instances containing unique Clone objects that may contain several targets
         //
+        file.instances = file.instances.reduce((accumulator, clone) => {
+            const match = accumulator.find((element) => element.equals(clone));
+
+            if (match) {
+                match.addTarget(clone);
+            } else {
+                accumulator.push(clone);
+            }
+
+            return accumulator;
+        }, []);
 
         return file;
     }
