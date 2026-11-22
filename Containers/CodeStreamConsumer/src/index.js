@@ -9,21 +9,105 @@ const CloneDetector = require('./CloneDetector');
 const CloneStorage = require('./CloneStorage');
 const FileStorage = require('./FileStorage');
 
-
+var allTimers = [];
 // Express and Formidable stuff to receice a file for further processing
 // --------------------
-const form = formidable({multiples:false});
+// const form = formidable({multiples:false});
 
 app.post('/', fileReceiver );
 function fileReceiver(req, res, next) {
+    const form = formidable({ multiples: false });
     form.parse(req, (err, fields, files) => {
+        if (err) {
+            console.error('form.parse failed:', err);
+            return res.status(400).end('Parse failed');
+        }
         fs.readFile(files.data.filepath, { encoding: 'utf8' })
-            .then( data => { return processFile(fields.name, data); });
+            .then(data => processFile(fields.name, data))
+            .then(() => res.end(''))
+            .catch(err => {
+                console.error('fileReceiver failed:', err);
+                res.status(500).end('Processing failed');
+            });
     });
-    return res.end('');
 }
 
 app.get('/', viewClones );
+app.get("/timers", (req, res) => {
+    if (allTimers.length === 0) {
+        return res.send(`
+            <html><body>
+                <h1>Processing Time Statistics</h1>
+                <p>No timer data yet.</p>
+                <p><a href="/">Back to main page</a></p>
+            </body></html>
+        `);
+    }
+
+    const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+
+    const total = allTimers.length;
+    const times = allTimers.map(t => t.total);
+    const lines = allTimers.map(t => t.lines);
+
+    const avgAll = avg(times);
+    const avgLast10 = avg(times.slice(-10));
+    const avgLast100 = avg(times.slice(-100));
+    const avgLast1000 = avg(times.slice(-1000));
+
+    const totalTime = times.reduce((a, b) => a + b, 0);
+    const totalLines = lines.reduce((a, b) => a + b, 0);
+    const usPerLineAll = totalLines ? totalTime / totalLines : 0;
+
+    const recent = allTimers.slice(-50);
+    const startIndex = total - recent.length;
+    const rows = recent.map((t, i) => {
+        const perLine = t.lines ? t.total / t.lines : 0;
+        return `<tr>
+            <td>${startIndex + i + 1}</td>
+            <td>${t.lines}</td>
+            <td>${t.total.toFixed(1)}</td>
+            <td>${perLine.toFixed(2)}</td>
+        </tr>`;
+    }).join("");
+
+    res.send(`
+        <html>
+        <head>
+            <title>Processing Time Statistics</title>
+            <style>
+                body { font-family: sans-serif; margin: 2em; }
+                table { border-collapse: collapse; margin-top: 1em; }
+                th, td { border: 1px solid #999; padding: 4px 10px; text-align: right; }
+                th { background: #eee; }
+                .summary td { text-align: left; }
+            </style>
+        </head>
+        <body>
+            <h1>Processing Time Statistics</h1>
+            <p><a href="/">Back to main page</a></p>
+
+            <h2>Summary</h2>
+            <table class="summary">
+                <tr><td>Total files processed</td><td>${total}</td></tr>
+                <tr><td>Average (all)</td><td>${avgAll.toFixed(2)} µs</td></tr>
+                <tr><td>Average (last 10)</td><td>${avgLast10.toFixed(2)} µs</td></tr>
+                <tr><td>Average (last 100)</td><td>${avgLast100.toFixed(2)} µs</td></tr>
+                <tr><td>Average (last 1000)</td><td>${avgLast1000.toFixed(2)} µs</td></tr>
+                <tr><td>Global µs/line</td><td>${usPerLineAll.toFixed(3)}</td></tr>
+                <tr><td>Total lines</td><td>${totalLines}</td></tr>
+            </table>
+
+            <h2>Last ${recent.length} files</h2>
+            <table>
+                <tr><th>#</th><th>Lines</th><th>Total (µs)</th><th>µs/line</th></tr>
+                ${rows}
+            </table>
+        </body>
+        </html>
+    `);
+});
+
 
 const server = app.listen(PORT, () => { console.log('Listening for files on port', PORT); });
 
@@ -139,9 +223,18 @@ function processFile(filename, contents) {
         .then( (file) => cloneStore.storeClones(file) )
         .then( (file) => Timer.endTimer(file, 'match') )
 
-        .then( (file) => cd.storeFile(file) )
         .then( (file) => Timer.endTimer(file, 'total') )
-        .then( PASS( (file) => lastFile = file ))
+        .then((file) => {
+            const timers = Timer.getTimers(file);
+            allTimers.push({
+                total: Number(timers.total),  // BigInt → Number
+                match: Number(timers.match),
+                lines: file.lines ? file.lines.length : 0,
+                name: file.name
+            });
+            return file;
+        })
+        .then( (file) => cd.storeFile(file) )
         .then( PASS( (file) => maybePrintStatistics(file, cd, cloneStore) ))
     // TODO Store the timers from every file (or every 10th file), create a new landing page /timers
     // and display more in depth statistics there. Examples include:
